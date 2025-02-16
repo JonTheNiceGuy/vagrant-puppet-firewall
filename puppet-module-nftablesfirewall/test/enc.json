@@ -1,0 +1,9 @@
+{
+    "classes": {
+        "nftablesfirewall": {},
+        "basevm": {},
+        "hardening": {}
+    },
+    "environment": "production",
+    "parameters": {}
+}

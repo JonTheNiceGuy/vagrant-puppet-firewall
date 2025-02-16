@@ -1,0 +1,148 @@
+#!/usr/sbin/nft -f
+
+flush ruleset
+
+table inet filter {
+
+    ##############################################################################
+    # Define network objects to be used later
+    ##############################################################################
+    set management_networks {
+      type ipv4_addr
+      flags interval
+      ##############################################
+      # NOTES BELOW ON WHY EACH NETWORK IS SPECIFIED
+      ##############################################
+      #            Vagrant      Local          Cloud
+      elements = { 10.0.2.0/24, 198.18.0.0/19, 198.19.0.0/19 }
+    }
+
+    set prod_networks {
+      type ipv4_addr
+      flags interval
+      ##############################################
+      # NOTES BELOW ON WHY EACH NETWORK IS SPECIFIED
+      ##############################################
+      #            Local           Cloud
+      elements = { 198.18.32.0/19, 198.19.32.0/19 }
+    }
+
+    set dev_networks {
+      type ipv4_addr
+      flags interval
+      ##############################################
+      # NOTES BELOW ON WHY EACH NETWORK IS SPECIFIED
+      ##############################################
+      #            Local           Cloud
+      elements = { 198.18.64.0/19, 198.19.64.0/19 }
+    }
+
+    set shared_networks {
+      type ipv4_addr
+      flags interval
+      ##############################################
+      # NOTES BELOW ON WHY EACH NETWORK IS SPECIFIED
+      ##############################################
+      #            Local           Cloud
+      elements = { 198.18.96.0/19, 198.19.96.0/19 }
+    }
+
+    ##############################################################################
+    # Define Rules
+    ##############################################################################
+    
+    chain input {                                            # Input is "What is targetting THIS host"
+        type filter hook input priority 0; policy drop;
+
+        # Allow loopback traffic
+        iifname "lo" accept
+
+        # Allow established and related connections
+        ct state { established, related } accept
+
+        # Allow ICMP traffic
+        ip protocol icmp accept
+
+        # Allow SSH (TCP/22) from specific subnets
+        ip saddr @management_networks tcp dport 22 log prefix "A-NFT-input.management: " accept
+        ip saddr @shared_networks     tcp dport 22 log prefix "A-NFT-input.shared: " accept
+
+        # Allow DHCP and BOOTP traffic
+        # This means that the nodes attached to this device can get IP addresses.
+        ip protocol udp udp sport 68 udp dport 67 accept
+        ip protocol udp udp sport 67 udp dport 68 accept
+
+        # Allow BGP across the Transit interface
+        iifname "transit" ip protocol tcp tcp dport 179 accept
+        oifname "transit" ip protocol tcp tcp dport 179 accept
+
+        # Drop everything else
+        log prefix "DROP_ALL-NFT-input: " drop
+    }
+
+    chain forward {                                         # Forward is "What can go THROUGH this host"
+        type filter hook forward priority 0; policy drop;
+
+        # Allow established and related connections
+        ct state { established, related } accept
+
+        # ICMP rules
+        ip protocol icmp icmp type { echo-reply, echo-request, time-exceeded, destination-unreachable } accept
+
+        # Shared network can talk out to anything
+        ip saddr @shared_networks log prefix "A-NFT-forward.shared-any: " accept
+        
+        # Allow intra-segment traffic
+        ip saddr @dev_networks    ip daddr @dev_networks  log prefix "A-NFT-forward.dev-dev: "   accept
+        ip saddr @prod_networks   ip daddr @prod_networks log prefix "A-NFT-forward.prod-prod: " accept
+        
+        # Allow Prod, Dev access to Shared
+        ip saddr @dev_networks    ip daddr @shared_networks log prefix "A-NFT-forward.dev-shared: " accept
+        ip saddr @prod_networks   ip daddr @shared_networks log prefix "A-NFT-forward.prod-shared: " accept
+
+        # Allow all segments access to the Internet, block the following subnets
+        ip daddr != {
+          0.0.0.0/8,                                      # RFC1700 (local network)
+          10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,      # RFC1918 (private networks)
+          169.254.0.0/16,                                 # RFC3300 (link local)
+          192.0.0.0/24,                                   # RFC5736 ("special purpose") 
+          192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,  # RFC5737 ("TEST-NET")
+          192.88.99.0/24,                                 # RFC3068 ("6to4 relay")
+          198.18.0.0/15,                                  # RFC2544 ("Inter-networking tests")
+          224.0.0.0/4, 240.0.0.0/4                        # RFC1112, RFC6890 ("Special Purpose" and Multicast)
+        } log prefix "A-NFT-forward.all-internet: " accept
+
+        # Drop everything else
+        log prefix "DROP_ALL-NFT-forward: " drop
+    }
+
+    chain output {
+        type filter hook output priority 0; policy accept;
+    }
+}
+
+
+table ip nat {
+    ##############################################################################
+    # Define network objects to be used later
+    ##############################################################################
+    set masq_networks {
+      type ipv4_addr
+      flags interval
+      ##############################################
+      # NOTES BELOW ON WHY EACH NETWORK IS SPECIFIED
+      ##############################################
+      #            Prod            Dev             Shared
+      elements = { 198.18.32.0/19, 198.18.64.0/19, 198.18.96.0/19 }
+    }
+
+    ##############################################################################
+    # Define Rules
+    ##############################################################################
+    chain postrouting {
+        type nat hook postrouting priority 100; policy accept;
+
+        # Masquerade all traffic going out of the WAN interface
+        ip saddr @masq_networks oifname "wan" masquerade
+    }
+}

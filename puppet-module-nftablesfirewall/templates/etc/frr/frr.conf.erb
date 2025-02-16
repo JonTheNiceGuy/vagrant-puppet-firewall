@@ -1,0 +1,75 @@
+! ######################################################
+! # Basic Setup
+! ######################################################
+!
+log syslog informational
+frr defaults traditional
+!
+! ######################################################
+! # Our BGP side
+! ######################################################
+!
+router bgp <%= @bgp_our_asn %>
+no bgp ebgp-requires-policy
+bgp router-id <%= @vm_lan_ip_address %>
+!
+<%- if @bgp_our_peer_enabled -%>
+! ######################################################
+! # Firewall BGP peers (how we find our own routes)
+! ######################################################
+!
+neighbor FW-PEERS peer-group
+neighbor FW-PEERS remote-as <%= @bgp_our_asn %>
+<% @peer_addresses.each do |ip| -%>
+neighbor <%= ip %> peer-group FW-PEERS
+<% end -%>
+!
+<%- end -%>
+<%- if @bgp_cloud_peer_enabled -%>
+! ######################################################
+! # Cloud BGP peers (how Cloud finds us)
+! ######################################################
+!
+neighbor CLOUD-PEERS peer-group
+neighbor CLOUD-PEERS remote-as <%= @bgp_cloud_peer_asn %>
+<% @bgp_cloud_peer_ips.each do |ip| -%>
+neighbor <%= ip %> peer-group CLOUD-PEERS
+<% end -%>
+!
+<%- end -%>
+<%- if @bgp_advertise_networks -%>
+! ######################################################
+! # Our local networks
+! ######################################################
+!
+address-family ipv4 unicast
+    network <%= @dev_address %>
+    network <%= @prod_address %>
+    network <%= @shared_address %>
+!
+<%- end -%>
+<%- if @bgp_our_peer_enabled -%>
+! ######################################################
+! Firewall BGP peers
+! ######################################################
+!
+    neighbor FW-PEERS activate
+!
+<%- end -%>
+<%- if @bgp_cloud_peer_enabled -%>
+! ######################################################
+! Cloud BGP peers
+! ######################################################
+!
+    neighbor CLOUD-PEERS activate
+!
+<%- end -%>
+exit-address-family
+!
+! ######################################################
+! We don't use IPv6 yet
+! ######################################################
+!
+address-family ipv6 unicast
+exit-address-family
+!

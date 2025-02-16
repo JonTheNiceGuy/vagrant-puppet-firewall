@@ -1,0 +1,14 @@
+dhcp-option=option:dns-server,<%= @dns_servers %>
+
+# Listen only on the specified interfaces
+interface=<%= @dev_nic %>
+dhcp-range=<%= @dev_nic %>,<%= @dev_subnet %>.10,<%= @dev_subnet %>.250,255.255.255.0,6h
+dhcp-option=<%= @dev_nic %>,option:router,<%= @dev_gateway %>
+
+interface=<%= @prod_nic %>
+dhcp-range=<%= @prod_nic %>,<%= @prod_subnet %>.10,<%= @prod_subnet %>.250,255.255.255.0,6h
+dhcp-option=<%= @prod_nic %>,option:router,<%= @prod_gateway %>
+
+interface=<%= @shared_nic %>
+dhcp-range=<%= @shared_nic %>,<%= @shared_subnet %>.10,<%= @shared_subnet %>.250,255.255.255.0,6h
+dhcp-option=<%= @shared_nic %>,option:router,<%= @shared_gateway %>

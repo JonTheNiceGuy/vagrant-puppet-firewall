@@ -1,0 +1,3 @@
+<% @interfaces.each do |interface,mac| -%>
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="<%= mac %>", NAME="<%= interface %>"
+<% end %>

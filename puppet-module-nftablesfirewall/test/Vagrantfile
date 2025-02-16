@@ -1,0 +1,149 @@
+############################################################
+############################## Define variables up-front
+############################################################
+vms_A_number    = 11
+vms_B_number    = 12
+global_mac_base = "160DECAF"
+vms_A_mac_base  = "#{global_mac_base}#{vms_A_number < 10 ? '0' : ''}#{vms_A_number}"
+vms_B_mac_base  = "#{global_mac_base}#{vms_B_number < 10 ? '0' : ''}#{vms_B_number}"
+############################################################
+############################## Standard VM Settings
+############################################################
+Vagrant.configure("2") do |config|
+  ############################ Default options for all hosts
+  config.vm.box = "almalinux/9"
+  config.vm.synced_folder ".", "/vagrant", type: :nfs, mount_options: ['rw', 'tcp', 'nolock']
+  config.vm.synced_folder "../..", "/etc/puppetlabs/code/environments/production/src_modules/", type: :nfs, mount_options: ['rw', 'tcp', 'nolock']
+  config.vm.provision "shell", path: 'client/make_mount.py'
+  config.vm.provider :virtualbox do |vb|
+    vb.memory = 2048
+    vb.cpus = 2
+    vb.linked_clone = true
+  end
+  ############################ Install nginx to host a simple webserver
+  config.vm.provision "shell", inline: <<-SCRIPT
+    # Setup useful tools
+    if ! command -v fping >/dev/null
+    then
+      dnf install -y epel-release && dnf install -y fping mtr nano nginx && systemctl enable --now nginx
+      # Configure web server to reply with servername
+      printf '<!DOCTYPE html><head><title>%s</title></head><body><h1>\n%s\n</h1></body></html>' "$(hostname -f)" > /usr/share/nginx/html/index.html
+    fi
+SCRIPT
+  ############################ Vagrant Cachier Setup
+  if Vagrant.has_plugin?("vagrant-cachier")
+    config.cache.scope = :box
+    # Note that the DNF plugin was only finalised after the last
+    # release of vagrant-cachier before it was discontinued. As such
+    # you must do `vagrant plugin install vagrant-cachier` and then
+    # find where it has been installed (usually
+    # ~/.vagrant/gems/*/gems/vagrant-cachier-*) and replace it with
+    # the latest commit from the upstream git project. Or uninstall
+    # vagrant-cachier :)
+    config.cache.enable :dnf
+    config.cache.synced_folder_opts = {
+      type: :nfs,
+      mount_options: ['rw', 'tcp', 'nolock']
+    }
+  end
+  ########################################################
+  ############################ Define VMs
+  ########################################################
+  # Puppet Server goes first, as the firewall hosts
+  # require it to get started.
+  ########################################################
+  config.vm.define "puppet" do |config|
+    config.vm.hostname = "puppet"
+    # \/ The puppetserver needs more memory
+    config.vm.provider "virtualbox" do |vb|
+        vb.memory = 4096
+    end
+    # \/ Fixed IP address needed for Vagrant-Cachier-NFS
+    config.vm.network "private_network", ip: "192.168.56.254", name: "vboxnet0"
+    # \/ Install and configure the Puppet server, plus the ENC.
+    config.vm.provision "shell", path: "puppetserver/setup.sh"
+  end
+  ########################################################
+  # Next fwA and fwB as these take longer to provision,
+  # have a reboot step and provide DHCP for other nodes
+  # later in the build.
+  ########################################################
+  config.vm.define :fwA do |config|
+    # eth0 mgmt via vagrant ssh, simulating "WAN", DHCP to 10.0.2.x                        # eth0 wan
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "prodA"   # eth1 prod
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "devA"    # eth2 dev
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "sharedA" # eth3 prod
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "transit" # eth4 transit
+    config.vm.provider "virtualbox" do |vb|
+      vb.customize ["modifyvm", :id, "--macaddress1", "#{vms_A_mac_base}01"] # wan
+      vb.customize ["modifyvm", :id, "--macaddress2", "#{vms_A_mac_base}02"] # prod
+      vb.customize ["modifyvm", :id, "--macaddress3", "#{vms_A_mac_base}03"] # dev
+      vb.customize ["modifyvm", :id, "--macaddress4", "#{vms_A_mac_base}04"] # shared
+      vb.customize ["modifyvm", :id, "--macaddress5", "#{vms_A_mac_base}05"] # transit
+    end
+    config.vm.network "private_network", ip: "192.168.56.#{vms_A_number}", name: "vboxnet0" # Only used in this Vagrant environment for Puppet
+    config.vm.hostname = "vms#{vms_A_number}fw#{vms_A_number}"
+    config.vm.provision "shell", path: "puppetagent/setup-and-apply.sh"
+  end
+  config.vm.define :fwB do |config|
+    # eth0 mgmt via vagrant ssh, simulating "WAN", DHCP to 10.0.2.x                        # eth0 wan
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "prodB"   # eth1 prod
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "devB"    # eth2 dev
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "sharedB" # eth3 prod
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "transit" # eth4 transit
+    config.vm.provider "virtualbox" do |vb|
+      vb.customize ["modifyvm", :id, "--macaddress1", "#{vms_B_mac_base}01"] # wan
+      vb.customize ["modifyvm", :id, "--macaddress2", "#{vms_B_mac_base}02"] # prod
+      vb.customize ["modifyvm", :id, "--macaddress3", "#{vms_B_mac_base}03"] # dev
+      vb.customize ["modifyvm", :id, "--macaddress4", "#{vms_B_mac_base}04"] # shared
+      vb.customize ["modifyvm", :id, "--macaddress5", "#{vms_B_mac_base}05"] # transit
+    end
+    config.vm.network "private_network", ip: "192.168.56.#{vms_B_number}", name: "vboxnet0" # Only used in this Vagrant environment for Puppet
+    config.vm.hostname = "vms#{vms_B_number}fw#{vms_B_number}"
+    config.vm.provision "shell", path: "puppetagent/setup-and-apply.sh"
+  end
+  ########################################################
+  # Prod, Dev and Shared nodes
+  ########################################################
+  # A side first
+  ########################################################
+  config.vm.define :prodA do |config|
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "prodA"
+    config.vm.network "private_network", ip: "192.168.56.#{vms_A_number + 10}", name: "vboxnet0"
+    config.vm.hostname = "prod-#{vms_A_number}"
+    config.vm.provision "shell", path: "client/manage_routes.sh"
+  end
+  config.vm.define :devA do |config|
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "devA"
+    config.vm.network "private_network", ip: "192.168.56.#{vms_A_number + 20}", name: "vboxnet0"
+    config.vm.hostname = "dev-#{vms_A_number}"
+    config.vm.provision "shell", path: "client/manage_routes.sh"
+  end
+  config.vm.define :sharedA do |config|
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "sharedA"
+    config.vm.network "private_network", ip: "192.168.56.#{vms_A_number + 30}", name: "vboxnet0"
+    config.vm.hostname = "shared-#{vms_A_number}"
+    config.vm.provision "shell", path: "client/manage_routes.sh"
+  end
+  ########################################################
+  # A side first
+  ########################################################
+  config.vm.define :prodB do |config|
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "prodB"
+    config.vm.network "private_network", ip: "192.168.56.#{vms_B_number + 10}", name: "vboxnet0"
+    config.vm.hostname = "prod-#{vms_B_number}"
+    config.vm.provision "shell", path: "client/manage_routes.sh"
+  end
+  config.vm.define :devB do |config|
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "devB"
+    config.vm.network "private_network", ip: "192.168.56.#{vms_B_number + 20}", name: "vboxnet0"
+    config.vm.hostname = "dev-#{vms_B_number}"
+    config.vm.provision "shell", path: "client/manage_routes.sh"
+  end
+  config.vm.define :sharedB do |config|
+    config.vm.network "private_network", auto_config: false, virtualbox__intnet: "sharedB"
+    config.vm.network "private_network", ip: "192.168.56.#{vms_B_number + 30}", name: "vboxnet0"
+    config.vm.hostname = "shared-#{vms_B_number}"
+    config.vm.provision "shell", path: "client/manage_routes.sh"
+  end
+end
